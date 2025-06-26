@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup
 import time
 import supabase
 from supabase import create_client
+import chromedriver_autoinstaller
+
 
 chromedriver_autoinstaller.install()
 ACCESSORY_KEYWORDS_AR = [
