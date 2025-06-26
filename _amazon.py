@@ -88,7 +88,10 @@ def get_products_from_search(keyword, category_code=None):
         title = title_span.get_text(strip=True) if title_span else "No title found"
 
         if whole:
-            full_price = f"{re.sub(r'[^\d]', '', whole.text)}.{fraction.text if fraction else '00'}"
+            whole_digits = re.sub(r'[^\d]', '', whole.text)
+            fraction_digits = fraction.text if fraction else '00'
+            full_price = f"{whole_digits}.{fraction_digits}"
+
             try:
                 price = float(full_price)
 
