@@ -4,6 +4,7 @@ from selenium.webdriver.common.by import By
 import time
 from supabase import create_client, Client
 import os
+import chromedriver_autoinstaller
 
 chromedriver_autoinstaller.install()
 # Supabase config
