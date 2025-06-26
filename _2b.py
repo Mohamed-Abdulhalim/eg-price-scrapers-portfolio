@@ -5,6 +5,7 @@ import time
 import supabase
 from supabase import create_client
 
+chromedriver_autoinstaller.install()
 ACCESSORY_KEYWORDS_AR = [
     "جراب", "كفر", "حماية", "غطاء", "لاصقة", "شاشة", "واقي",
     "سماعة", "سماعات", "قلم", "عدسة", "حافظة", "غطى", "كاميرا",
