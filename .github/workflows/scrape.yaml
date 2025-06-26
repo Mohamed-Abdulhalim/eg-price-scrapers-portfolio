@@ -1,0 +1,38 @@
+name: Daily Scraper
+
+on:
+  schedule:
+    - cron: "0 2 * * *"  # Runs every day at 2 AM UTC
+  workflow_dispatch:     # Allows manual triggering from GitHub too
+
+jobs:
+  run-scrapers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install selenium supabase
+
+      - name: Run Amazon scraper
+        run: python amazon.py
+
+      - name: Run Jumia scraper
+        run: python jumia.py
+
+      - name: Run Noon scraper
+        run: python noon.py
+
+      - name: Run B.Tech scraper
+        run: python btech.py
+
+      - name: Run 2B scraper
+        run: python 2b.py
