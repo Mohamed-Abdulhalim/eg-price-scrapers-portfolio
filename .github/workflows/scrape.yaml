@@ -29,7 +29,7 @@ jobs:
           sudo apt install -y google-chrome-stable
 
       - name: Run Amazon scraper
-        run: python amazon.py
+        run: python _amazon.py
 
       - name: Run Noon scraper
         run: python noon.py
@@ -40,5 +40,5 @@ jobs:
       - name: Run B.TECH scraper
         run: python btech.py
 
-      - name: Run 2B scraper
+      - name: Run _2B scraper
         run: python 2b.py
