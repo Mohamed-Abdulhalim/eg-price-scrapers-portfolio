@@ -1,0 +1,135 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Price Tool</title>
+
+  <!-- Tailwind CSS + Flowbite -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: '#6366f1',
+          }
+        }
+      }
+    }
+  </script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.css" rel="stylesheet" />
+</head>
+
+<body class="bg-gray-900 text-white min-h-screen flex items-center justify-center">
+
+  <div class="max-w-xl w-full mx-auto p-6 bg-gray-800 rounded-xl shadow-lg">
+    <h1 class="text-4xl font-bold mb-6 text-center text-white">📱 AI Price Comparison</h1>
+
+    <form action="/search" method="get" class="space-y-4">
+      <!-- Brand dropdown -->
+      <div>
+        <label class="block mb-1">Brand</label>
+        <select name="brand_or_model" id="brand-select" class="text-black p-2 rounded w-64">
+          <option value="">Any</option>
+          {% for brand in brands %}
+            <option value="{{ brand }}">{{ brand }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Model dropdown -->
+      <div>
+        <label class="block mb-1">Model</label>
+        <select name="model" id="model-select" class="text-black p-2 rounded w-64" disabled>
+          <option value="">Any</option>
+        </select>
+      </div>
+
+      <!-- Suffix dropdown -->
+      <div>
+        <label class="block mb-1">Suffix</label>
+        <select name="suffix" id="suffix-select" class="text-black p-2 rounded w-64" disabled>
+          <option value="">Any</option>
+        </select>
+      </div>
+
+      <!-- Category (fixed) -->
+      <div>
+        <label class="block mb-1">Category</label>
+        <select name="category" class="text-black p-2 rounded w-64">
+          <option value="">All</option>
+          <option value="mobiles">Mobiles</option>
+        </select>
+      </div>
+
+      <button type="submit" class="px-4 py-2 bg-blue-600 rounded">Search</button>
+    </form>
+  </div>
+
+  <script>
+    const brandSelect = document.getElementById('brand-select');
+    const modelSelect = document.getElementById('model-select');
+    const suffixSelect = document.getElementById('suffix-select');
+
+    brandSelect.addEventListener('change', () => {
+      const brand = brandSelect.value;
+
+      if (!brand) {
+        modelSelect.innerHTML = '<option value="">Any</option>';
+        modelSelect.disabled = true;
+        suffixSelect.innerHTML = '<option value="">Any</option>';
+        suffixSelect.disabled = true;
+        return;
+      }
+
+      // Fetch models for brand
+      modelSelect.disabled = false;
+      modelSelect.innerHTML = '<option>Loading...</option>';
+
+      fetch(`/get_models?brand=${encodeURIComponent(brand)}`)
+        .then(res => res.json())
+        .then(models => {
+          modelSelect.innerHTML = '<option value="">Any</option>';
+          models.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model;
+            option.textContent = model;
+            modelSelect.appendChild(option);
+          });
+        })
+        .catch(() => {
+          modelSelect.innerHTML = '<option value="">Any</option>';
+          modelSelect.disabled = true;
+        });
+
+      // Fetch suffixes for brand
+      suffixSelect.disabled = false;
+      suffixSelect.innerHTML = '<option>Loading...</option>';
+
+      fetch(`/get_suffixes?brand=${encodeURIComponent(brand)}`)
+        .then(res => res.json())
+        .then(suffixes => {
+          suffixSelect.innerHTML = '<option value="">Any</option>';
+          suffixes.forEach(suffix => {
+            const option = document.createElement('option');
+            option.value = suffix;
+            option.textContent = suffix;
+            suffixSelect.appendChild(option);
+          });
+        })
+        .catch(() => {
+          suffixSelect.innerHTML = '<option value="">Any</option>';
+          suffixSelect.disabled = true;
+        });
+    });
+  </script>
+
+  <!-- Flowbite JS -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/flowbite/2.3.0/flowbite.min.js"></script>
+</body>
+
+</html>
