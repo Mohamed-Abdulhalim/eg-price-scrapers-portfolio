@@ -66,6 +66,17 @@
         </select>
       </div>
 
+      <!-- AI Assistant -->
+      <div class="pt-4">
+        <label class="block mb-1">🔮 جرب تسأل صديقك الذكي</label>
+        <div class="flex items-center gap-2">
+          <input type="text" id="chatInput" class="text-black p-2 rounded w-full" placeholder="أنا عايز موبايل شاومي بالتقسيط">
+          <button type="button" onclick="sendChat()" class="px-3 py-2 bg-green-600 rounded text-white">اسأل</button>
+        </div>
+        <p id="chatResponse" class="mt-2 text-sm text-green-300"></p>
+      </div>
+
+      <!-- Submit Button -->
       <button type="submit" class="px-4 py-2 bg-blue-600 rounded">Search</button>
     </form>
   </div>
@@ -126,6 +137,25 @@
           suffixSelect.disabled = true;
         });
     });
+
+    // Chat with AI
+    function sendChat() {
+      const message = document.getElementById('chatInput').value.trim();
+      if (!message) return;
+
+      fetch('/chat_ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message })
+      })
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById('chatResponse').innerText = data.response || "معرفتش أفهمك يا معلم، جرب تكتبلي أوضح شوية 😊";
+      })
+      .catch(() => {
+        document.getElementById('chatResponse').innerText = "حصلت مشكلة في الاتصال، جرب تاني بعد شوية 🛠️";
+      });
+    }
   </script>
 
   <!-- Flowbite JS -->

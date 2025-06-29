@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 from supabase import create_client, Client
+import re
 
 app = Flask(__name__)
 
@@ -67,6 +68,51 @@ def search():
     results = response.data or []
 
     return render_template("results.html", query=brand, results=results)
+
+@app.route('/chat_ai', methods=['POST'])
+def chat_ai():
+    
+
+    user_message = request.json.get("message", "")
+    # TODO: Replace this with an actual LLM call
+    # For now, let's parse manually for demo
+
+    # Naive regex extraction (improve later with AI)
+    phone_keywords = re.findall(r"(ايفون|سامسونج|شاومي|ريدمي|هواوي|ريلمي)", user_message, re.IGNORECASE)
+    model_keywords = re.findall(r"\d{1,2}", user_message)
+    suffix_keywords = re.findall(r"(برو ماكس|برو|بلس|ألترا)", user_message, re.IGNORECASE)
+    wants_installment = "تقسيط" in user_message
+
+    brand = phone_keywords[0] if phone_keywords else ""
+    model = model_keywords[0] if model_keywords else ""
+    suffix = suffix_keywords[0] if suffix_keywords else ""
+
+    # Run search using your existing logic
+    query = supabase.table("products").select("*")
+
+    if brand:
+        query = query.ilike("brand_or_model", f"%{brand}%")
+    if model:
+        query = query.ilike("model", f"%{model}%")
+    if suffix:
+        query = query.ilike("suffix", f"%{suffix}%")
+    if wants_installment:
+        query = query.neq("installment", None)  # Or whatever your installment column is
+
+    results = query.execute().data or []
+
+    if not results:
+        return jsonify({"response": "معرفتش ألاقي الموبايل ده يا معلم، جرب تكتبلي اسم تاني 😉"})
+
+    # Pick cheapest result
+    sorted_results = sorted(results, key=lambda x: x.get("price", 1e9))
+    top = sorted_results[0]
+
+    response = f"بص يا معلم، أرخص {top['brand_or_model']} {top['model']} {top['suffix']} لقيته في {top['store']} بـ {top['price']} جنيه"
+    if wants_installment and top.get("installment"):
+        response += f" وتقسيطه {top['installment']}"
+
+    return jsonify({"response": response})
 
 if __name__ == "__main__":
     app.run(debug=True)
