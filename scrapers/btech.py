@@ -3,7 +3,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 import time
 from supabase import create_client, Client
-import os
+import os, sys
 import chromedriver_autoinstaller
 
 chromedriver_autoinstaller.install()
@@ -11,6 +11,8 @@ chromedriver_autoinstaller.install()
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]  # use service_role for writes
+if not SUPABASE_URL or not SUPABASE_KEY:
+    sys.exit("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (set as Actions secrets and mapped in scrape.yml).")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 ACCESSORY_KEYWORDS_AR = [
