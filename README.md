@@ -20,7 +20,6 @@ This project maintains **5 production scrapers** running daily via GitHub Action
 - Python (requests, bs4, selenium where needed)
 - GitHub Actions
 - Supabase (Postgres, Row-Level Security, API)
-- Optional front-end (in `/webapp`)
 
 ### Workflow Status
 [![Run scrapers daily](https://github.com/Mohamed-Abdulhalim/eg-price-scrapers-portfolio/actions/workflows/scrape.yaml/badge.svg)](https://github.com/Mohamed-Abdulhalim/eg-price-scrapers-portfolio/actions/workflows/scrape.yaml)
