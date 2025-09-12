@@ -26,7 +26,15 @@ This project maintains **5 production scrapers** running daily via GitHub Action
 
 ### Demo
 - See sample dataset: [products.csv](samples/products.csv)
-- Screenshots in `/screenshots`
+- Screenshots:
+### Scraper Run
+![Terminal run](screenshots/amazon_run.png)
+
+### GitHub Actions (Daily Runs)
+![GitHub Actions](screenshots/actions_history.png)
+
+### Supabase Table (Live Data)
+![Supabase Table](screenshots/supabase_table.png)
 
 ### How It Works
 1. GitHub Actions runs scrapers daily at 02:00 Cairo time
