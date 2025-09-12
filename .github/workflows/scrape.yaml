@@ -29,16 +29,16 @@ jobs:
           sudo apt install -y google-chrome-stable
 
       - name: Run Amazon scraper
-        run: echo -e "mobiles\niphone 13" | python _amazon.py
+        run: echo -e "mobiles\niphone 13" | python scrapers/_amazon.py
 
       - name: Run Noon scraper
-        run: echo -e "iphone 13\nmobiles" | python noon.py
+        run: echo -e "iphone 13\nmobiles" | python scrapers/noon.py
 
       - name: Run Jumia scraper
-        run: echo -e "iphone 13\nmobiles" | python jumia.py
+        run: echo -e "iphone 13\nmobiles" | python scrapers/jumia.py
 
       - name: Run BTech scraper
-        run: echo -e "iphone 13\nmobiles" | python btech.py
+        run: echo -e "iphone 13\nmobiles" | python scrapers/btech.py
 
       - name: Run 2B scraper
-        run: echo -e "iphone 13\nmobiles" | python _2b.py
+        run: echo -e "iphone 13\nmobiles" | python scrapers/_2b.py
