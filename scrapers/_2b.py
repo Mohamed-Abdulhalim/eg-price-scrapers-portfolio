@@ -5,7 +5,7 @@ import time
 import supabase
 from supabase import create_client
 import chromedriver_autoinstaller
-
+import os
 
 chromedriver_autoinstaller.install()
 ACCESSORY_KEYWORDS_AR = [
@@ -20,7 +20,7 @@ ACCESSORY_KEYWORDS_EN = [
 ]
 
 # Supabase config
-import os
+
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]  # use service_role for writes
 supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
