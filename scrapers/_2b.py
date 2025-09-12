@@ -21,11 +21,14 @@ ACCESSORY_KEYWORDS_EN = [
 
 # Supabase config
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"] # use service_role for writes
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")  # service_role for server-side writes
+
 if not SUPABASE_URL or not SUPABASE_KEY:
-    sys.exit("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (set as Actions secrets and mapped in scrape.yml).")
-supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    sys.exit("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY. "
+             "Add repo secrets and map them via env in the workflow.")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def is_accessory(title):
     title_lower = title.lower()
