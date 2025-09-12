@@ -5,7 +5,7 @@ import time
 import supabase
 from supabase import create_client
 import chromedriver_autoinstaller
-import os
+import os, sys
 
 chromedriver_autoinstaller.install()
 ACCESSORY_KEYWORDS_AR = [
@@ -22,7 +22,9 @@ ACCESSORY_KEYWORDS_EN = [
 # Supabase config
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]  # use service_role for writes
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"] # use service_role for writes
+if not SUPABASE_URL or not SUPABASE_KEY:
+    sys.exit("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY (set as Actions secrets and mapped in scrape.yml).")
 supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def is_accessory(title):
