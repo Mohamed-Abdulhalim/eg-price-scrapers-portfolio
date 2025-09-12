@@ -23,7 +23,7 @@ This project maintains **5 production scrapers** running daily via GitHub Action
 - Optional front-end (in `/webapp`)
 
 ### Workflow Status
-![Daily Scrapes](https://github.com/<you>/ai2/actions/workflows/scrape.yaml/badge.svg)
+[![Run scrapers daily](https://github.com/Mohamed-Abdulhalim/eg-price-scrapers-portfolio/actions/workflows/scrape.yaml/badge.svg)](https://github.com/Mohamed-Abdulhalim/eg-price-scrapers-portfolio/actions/workflows/scrape.yaml)
 
 ### Demo
 - See sample dataset: [products.csv](samples/products.csv)
