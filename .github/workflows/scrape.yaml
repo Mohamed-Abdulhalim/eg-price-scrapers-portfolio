@@ -2,47 +2,62 @@ name: Run scrapers daily
 
 on:
   schedule:
-    - cron: '0 22 * * *'  # every day at 2 AM UTC
+    - cron: "0 2 * * *"   # every day at 02:00 UTC
   workflow_dispatch:
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 60
+
+    # Make your Supabase creds available to ALL steps in this job
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Install Chrome (headless browser for Selenium)
+      # Optional: only if any scraper uses Selenium + Chrome
+      - name: Install Chrome (for Selenium, if needed)
         run: |
-          sudo apt update
-          sudo apt install -y google-chrome-stable
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable || true
+          command -v google-chrome || echo "google-chrome not found; your scrapers should not require it."
+
+      # Prove the env vars are actually present (no secrets printed)
+      - name: Debug env presence (no secrets printed)
+        run: |
+          [ -n "$SUPABASE_URL" ] && echo "SUPABASE_URL present" || (echo "SUPABASE_URL MISSING"; exit 1)
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && echo "SERVICE_ROLE present" || (echo "SERVICE_ROLE MISSING"; exit 1)
 
       - name: Run Amazon scraper
-        run: echo -e "mobiles\niphone 13" | python scrapers/_amazon.py
+        run: |
+          echo -e "mobiles\niphone 13" | python scrapers/_amazon.py
 
       - name: Run Noon scraper
-        run: echo -e "iphone 13\nmobiles" | python scrapers/noon.py
+        run: |
+          echo -e "iphone 13\nmobiles" | python scrapers/noon.py
 
       - name: Run Jumia scraper
-        run: echo -e "iphone 13\nmobiles" | python scrapers/jumia.py
+        run: |
+          echo -e "iphone 13\nmobiles" | python scrapers/jumia.py
 
       - name: Run BTech scraper
-        run: echo -e "iphone 13\nmobiles" | python scrapers/btech.py
+        run: |
+          echo -e "iphone 13\nmobiles" | python scrapers/btech.py
 
       - name: Run 2B scraper
-        run: echo -e "iphone 13\nmobiles" | python scrapers/_2b.py
+        run: |
+          echo -e "iphone 13\nmobiles" | python scrapers/_2b.py
