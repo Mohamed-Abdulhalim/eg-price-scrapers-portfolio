@@ -8,8 +8,9 @@ import chromedriver_autoinstaller
 
 chromedriver_autoinstaller.install()
 # Supabase config
-SUPABASE_URL = "https://nhnbizdwcfovwxmepwmt.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5obmJpemR3Y2Zvdnd4bWVwd210Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA5NTkzMzMsImV4cCI6MjA2NjUzNTMzM30.0Dmk33vYjiTCElh7rBY0JFelqUrEeKGQHf1uGIsUA10"
+
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]  # use service_role for writes
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 ACCESSORY_KEYWORDS_AR = [
