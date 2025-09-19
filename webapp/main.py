@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify
 from supabase import create_client, Client
 import re
+import os
 
 app = Flask(__name__)
 
