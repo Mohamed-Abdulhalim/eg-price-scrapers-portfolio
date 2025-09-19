@@ -3,3 +3,6 @@ beautifulsoup4
 selenium
 supabase
 chromedriver-autoinstaller
+gunicorn==21.2.0
+Flask==3.0.3
+httpx==0.28.1
