@@ -3,11 +3,11 @@
 """
 2B smartphones scraper — repo-ready, requests-only edition (CI-safe)
 
-Why this version: your GitHub Action returned 0 items because headless Chrome on CI is brittle
-(Chrome not installed, sandbox flags, anti-bot). This build drops Selenium completely and fetches
-category/search pages with HTTP requests + realistic headers.
+Why this version: your GitHub Action hit 403 Forbidden because 2B sometimes blocks cloud IPs
+or headless browsers. This build uses plain HTTP with warm-up requests, UA rotation, and
+optional proxy support so it behaves on CI.
 
-It keeps everything else identical to the previous repo-ready file:
+It keeps everything else you wanted:
 - Strict accessory filtering; English-normalized parsing; iPhone model keeps number
 - Dedupe by (link, suffix)
 - Exports CSV/JSON locally AND upserts to Supabase `products`
@@ -17,6 +17,7 @@ It keeps everything else identical to the previous repo-ready file:
 Env:
   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  (preferred) or SUPABASE_ANON_KEY (fallback)
   SUPABASE_TABLE=products (optional)
+  SCRAPER_PROXY=http://user:pass@host:port  (optional; helps if 403 persists)
 
 Category label unified to: "mobiles"
 Query field values:
@@ -55,7 +56,7 @@ try:
 except Exception:
     create_client = None
 
-# ---------------- HTTP session ----------------
+# ---------------- HTTP/network hardening ----------------
 UA_POOL = [
     # A few modern desktop agents
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
@@ -74,15 +75,62 @@ def build_session(lang: str) -> requests.Session:
         "Pragma": "no-cache",
         "DNT": "1",
         "Upgrade-Insecure-Requests": "1",
+        "Connection": "keep-alive",
     })
+    proxy = os.getenv("SCRAPER_PROXY")
+    if proxy:
+        s.proxies.update({"http": proxy, "https": proxy})
     return s
 
 
-def get_soup(session: requests.Session, url: str, sleep: float = 1.0) -> BeautifulSoup:
-    r = session.get(url, timeout=20)
-    r.raise_for_status()
-    time.sleep(sleep + random.random() * 0.6)
-    return BeautifulSoup(r.text, "html.parser")
+def _cf_warmup(session: requests.Session, lang: str):
+    """Touch the language home once to set any cookies before real pages."""
+    base = "https://2b.com.eg/ar/" if lang == "ar" else "https://2b.com.eg/en/"
+    try:
+        session.get(base, timeout=20)
+        time.sleep(0.8 + random.random())
+    except Exception:
+        pass
+
+
+def fetch_html(session: requests.Session, url: str, lang: str, tries: int = 4) -> Optional[str]:
+    """Fetch with retries, UA rotation, referer-ish behavior, and lang flip on 403."""
+    _cf_warmup(session, lang)
+    for attempt in range(1, tries + 1):
+        try:
+            r = session.get(url, timeout=25)
+            if r.status_code == 403:
+                # rotate UA and tweak language, then try alternate language path
+                session.headers.update({
+                    "User-Agent": random.choice(UA_POOL),
+                    "Accept-Language": ("ar,en-US;q=0.9,en;q=0.8" if lang == "ar" else "en-US,en;q=0.9,ar;q=0.4")
+                })
+                time.sleep(1.5 * attempt)
+                if "/en/" in url:
+                    alt = url.replace("/en/", "/ar/")
+                    r = session.get(alt, timeout=25)
+                elif "/ar/" in url:
+                    alt = url.replace("/ar/", "/en/")
+                    r = session.get(alt, timeout=25)
+            r.raise_for_status()
+            time.sleep(0.8 + random.random()*0.6)
+            return r.text
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code in (403, 429, 503):
+                time.sleep(1.2 * attempt)
+                continue
+            raise
+        except requests.RequestException:
+            time.sleep(1.0 * attempt)
+            continue
+    return None
+
+
+def get_soup(session: requests.Session, url: str, lang: str) -> Optional[BeautifulSoup]:
+    html = fetch_html(session, url, lang=lang)
+    if not html:
+        return None
+    return BeautifulSoup(html, "html.parser")
 
 # ---------------- Parsing helpers ----------------
 ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
@@ -245,7 +293,8 @@ def find_product_cards(soup: BeautifulSoup):
         "div.item.product",
     ]:
         cards = soup.select(sel)
-        if cards: return cards
+        if cards:
+            return cards
     return []
 
 PREORDER_PAT = re.compile(r"pre[- ]?order|pre\s?order|طلب\s?مسبق", re.I)
@@ -261,7 +310,8 @@ def extract_card(card, lang: str, origin: str) -> Optional[Dict]:
             break
     if not title:
         el = card.select_one(".product-item-name") or card.find(["h2","h3","h4"]) 
-        if el: title = el.get_text(strip=True)
+        if el:
+            title = el.get_text(strip=True)
     if not title:
         return None
 
@@ -282,7 +332,8 @@ def extract_card(card, lang: str, origin: str) -> Optional[Dict]:
     for sel in [".price", ".special-price .price", ".price-wrapper", ".price-box", "[data-price-type='finalPrice']"]:
         el = card.select_one(sel)
         if el and el.get_text(strip=True):
-            price_text = el.get_text(" ", strip=True); break
+            price_text = el.get_text(" ", strip=True)
+            break
     price = parse_price(price_text)
 
     norm = normalize_for_parse(title)
@@ -303,23 +354,30 @@ def paginate_category(session: requests.Session, url: str, max_pages: int, lang:
     out: List[Dict] = []
     page = 1
     while page <= max_pages:
-        soup = get_soup(session, url)
+        soup = get_soup(session, url, lang)
+        if soup is None:
+            print(f"[2B][cat {lang}] page {page}: FETCH FAILED (403/429/503)")
+            break
         cards = find_product_cards(soup)
         kept = 0
         for c in cards:
             item = extract_card(c, lang=lang, origin="category")
             if item:
                 item["__query"] = "category"
-                out.append(item); kept += 1
-        # find next page
+                out.append(item)
+                kept += 1
+        # next page
         next_link = None
         for sel in ["a.action.next", "li.pages-item-next a", "a[rel='next']", "a.page-next"]:
             a = soup.select_one(sel)
-            if a and a.get("href"): next_link = a["href"]; break
+            if a and a.get("href"):
+                next_link = a["href"]
+                break
         print(f"[2B][cat {lang}] page {page}: cards={len(cards)} kept={kept}")
         if not next_link:
             break
-        url = next_link; page += 1
+        url = next_link
+        page += 1
     return out
 
 
@@ -328,14 +386,18 @@ def search_pages(session: requests.Session, term: str, max_pages: int, lang: str
     out: List[Dict] = []
     for p in range(1, max_pages + 1):
         url = urljoin(base, "catalogsearch/result/?" + urlencode({"q": term, "p": p}))
-        soup = get_soup(session, url)
+        soup = get_soup(session, url, lang)
+        if soup is None:
+            print(f"[2B][search {lang}] '{term}' p{p}: FETCH FAILED (403/429/503)")
+            break
         cards = find_product_cards(soup)
         kept = 0
         for c in cards:
             item = extract_card(c, lang=lang, origin="search")
             if item:
                 item["__query"] = term
-                out.append(item); kept += 1
+                out.append(item)
+                kept += 1
         print(f"[2B][search {lang}] '{term}' p{p}: cards={len(cards)} kept={kept}")
         if len(cards) == 0 or (kept == 0 and p >= 2):
             break
@@ -344,11 +406,14 @@ def search_pages(session: requests.Session, term: str, max_pages: int, lang: str
 # ------------- Dedupe & Output -------------
 
 def dedupe(items: List[Dict]) -> List[Dict]:
-    seen: Set[Tuple[str, str]] = set(); out: List[Dict] = []
+    seen: Set[Tuple[str, str]] = set()
+    out: List[Dict] = []
     for x in items:
         key = (x["link"], x.get("suffix") or "")
-        if key in seen: continue
-        seen.add(key); out.append(x)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(x)
     return out
 
 
@@ -358,8 +423,10 @@ def save_outputs(rows: List[Dict], csv_path: str, json_path: str):
         "category","brand","series","model","suffix","origin","scraped_at","lang","__query"
     ]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields); w.writeheader()
-        for r in rows: w.writerow({k: r.get(k, "") for k in fields})
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in fields})
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=2)
     print(f"Wrote CSV: {csv_path}\nWrote JSON: {json_path}")
@@ -413,7 +480,7 @@ def supabase_upsert_all(rows: List[Dict]):
 # ------------- Main -------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Scrape 2B smartphones (requests-only).", add_help=True)
+    ap = argparse.ArgumentParser(description="Scrape 2B smartphones (requests-only, CI-hardened).", add_help=True)
     ap.add_argument("--lang", choices=["en","ar"], default=DEFAULT_LANG)
     ap.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
     ap.add_argument("--csv", type=str, default=DEFAULT_OUT_CSV)
