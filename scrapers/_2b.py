@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-2B smartphones scraper — repo-ready edition
+2B smartphones scraper — repo-ready, requests-only edition (CI-safe)
 
-This version aligns with your Supabase schema and GitHub Action style.
-- Zero-arg default: crawls 2B Smartphones category + brand search sweep
+Why this version: your GitHub Action returned 0 items because headless Chrome on CI is brittle
+(Chrome not installed, sandbox flags, anti-bot). This build drops Selenium completely and fetches
+category/search pages with HTTP requests + realistic headers.
+
+It keeps everything else identical to the previous repo-ready file:
 - Strict accessory filtering; English-normalized parsing; iPhone model keeps number
 - Dedupe by (link, suffix)
-- Exports CSV/JSON locally (optional) AND upserts to Supabase `products`
-- Only sends columns that exist in your table: 
-  store, title, price, category, query, brand_or_model, model, suffix, link, country, currency, raw_title
+- Exports CSV/JSON locally AND upserts to Supabase `products`
+- Only sends columns your table has: store, title, price, category, query,
+  brand_or_model, model, suffix, link, country, currency, raw_title
 
 Env:
   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  (preferred) or SUPABASE_ANON_KEY (fallback)
@@ -18,18 +21,20 @@ Env:
 Category label unified to: "mobiles"
 Query field values:
   - "category" for category crawl results
-  - the actual search term for search results (e.g., "iphone")
+  - actual search term for search results (e.g., "iphone")
 """
 import os, re, time, csv, json, random, argparse
 from typing import List, Dict, Optional, Tuple, Set
 from urllib.parse import urljoin, urlencode
+
+import requests
+from bs4 import BeautifulSoup
 
 # ---------------- Defaults ----------------
 DEFAULT_LANG = "en"               # crawl site root: en or ar
 DEFAULT_MAX_PAGES = 10            # pagination depth for category and search
 DEFAULT_OUT_CSV = "2b_smartphones.csv"
 DEFAULT_OUT_JSON = "2b_smartphones.json"
-DEFAULT_HEADLESS = True
 DEFAULT_SEARCH_TERMS = [
     "iphone","apple","samsung","galaxy","xiaomi","redmi","poco","oppo","reno","realme",
     "huawei","honor","vivo","nokia","oneplus","motorola","infinix","tecno","sony",
@@ -40,24 +45,44 @@ DEFAULT_SEARCH_TERMS = [
 CATEGORY_EN = "https://2b.com.eg/en/mobile-tablets/mobile-phones.html"
 CATEGORY_AR = "https://2b.com.eg/ar/mobile-tablets/mobile-phones.html"
 
-STORE = VENDOR = "2B"
+STORE = "2B"
 COUNTRY = "EG"
 CURRENCY = "EGP"
-
-# ---------------- Selenium ----------------
-USE_UC = True
-try:
-    import undetected_chromedriver as uc
-except Exception:
-    USE_UC = False
-
-from bs4 import BeautifulSoup
 
 # Supabase client
 try:
     from supabase import create_client
 except Exception:
     create_client = None
+
+# ---------------- HTTP session ----------------
+UA_POOL = [
+    # A few modern desktop agents
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+]
+
+
+def build_session(lang: str) -> requests.Session:
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": random.choice(UA_POOL),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ar,en-US;q=0.9,en;q=0.8" if lang == "ar" else "en-US,en;q=0.9,ar;q=0.4",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "DNT": "1",
+        "Upgrade-Insecure-Requests": "1",
+    })
+    return s
+
+
+def get_soup(session: requests.Session, url: str, sleep: float = 1.0) -> BeautifulSoup:
+    r = session.get(url, timeout=20)
+    r.raise_for_status()
+    time.sleep(sleep + random.random() * 0.6)
+    return BeautifulSoup(r.text, "html.parser")
 
 # ---------------- Parsing helpers ----------------
 ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
@@ -85,15 +110,15 @@ SMARTPHONE_HINTS = [
 ]
 
 SERIES_TO_BRAND = {"redmi": "xiaomi", "poco": "xiaomi", "galaxy": "samsung"}
-IPHONE_MODELS = ["Pro Max","Pro","Plus","Ultra","Air","Mini"]
 
-# ---------------- Utils ----------------
 
 def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
+
 def normalize_spaces(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
+
 
 def ar_to_en_tokens(text: str) -> str:
     t = text or ""
@@ -101,11 +126,13 @@ def ar_to_en_tokens(text: str) -> str:
         t = re.sub(ar, en, t, flags=re.IGNORECASE)
     return t
 
+
 def normalize_for_parse(raw: str) -> str:
     t = (raw or "").translate(ARABIC_DIGITS)
     t = ar_to_en_tokens(t)
     t = t.replace("–","-").replace("—","-")
     return normalize_spaces(t)
+
 
 def parse_price(text: str) -> Optional[float]:
     if not text:
@@ -127,6 +154,7 @@ def parse_price(text: str) -> Optional[float]:
             return val
     return None
 
+
 def looks_like_phone(title: str) -> bool:
     t = (title or "").lower()
     if any(k in t for k in NOT_PHONE_SERIES):
@@ -137,7 +165,6 @@ def looks_like_phone(title: str) -> bool:
 
 
 def pick_brand_series_model(t: str) -> Tuple[str, Optional[str], str]:
-    """Return (brand, series, model) in EN; model keeps iPhone generation."""
     tl = f" {t.lower()} "
     brand = None
     series = None
@@ -151,7 +178,7 @@ def pick_brand_series_model(t: str) -> Tuple[str, Optional[str], str]:
                 brand = b
             break
 
-    # iPhone: keep the number
+    # iPhone: keep the generation number
     if " iphone " in tl:
         m = re.search(r"iphone\s+(\d{1,2}[eE]?)\s*(pro\s*max|pro|plus|ultra|air|mini)?", t, re.I)
         if m:
@@ -206,32 +233,7 @@ def parse_suffix(t: str) -> str:
     parts.extend(flags)
     return " / ".join(parts)
 
-# ------------- Selenium helpers -------------
-
-def make_driver(headless=DEFAULT_HEADLESS):
-    if USE_UC:
-        opts = uc.ChromeOptions()
-        if headless:
-            opts.add_argument("--headless=new")
-        opts.add_argument("--no-sandbox"); opts.add_argument("--disable-dev-shm-usage"); opts.add_argument("--disable-gpu")
-        opts.add_argument("--window-size=1360,2200")
-        return uc.Chrome(options=opts, use_subprocess=True)
-    else:
-        from selenium import webdriver
-        from selenium.webdriver.chrome.options import Options
-        opts = Options()
-        if headless:
-            opts.add_argument("--headless=new")
-        opts.add_argument("--no-sandbox"); opts.add_argument("--disable-dev-shm-usage"); opts.add_argument("--disable-gpu")
-        opts.add_argument("--window-size=1360,2200")
-        return webdriver.Chrome(options=opts)
-
-
-def get_soup(driver, url: str) -> BeautifulSoup:
-    driver.get(url)
-    time.sleep(1.1 + random.random())
-    return BeautifulSoup(driver.page_source, "html.parser")
-
+# ------------- Page parsing -------------
 
 def find_product_cards(soup: BeautifulSoup):
     for sel in [
@@ -260,7 +262,8 @@ def extract_card(card, lang: str, origin: str) -> Optional[Dict]:
     if not title:
         el = card.select_one(".product-item-name") or card.find(["h2","h3","h4"]) 
         if el: title = el.get_text(strip=True)
-    if not title: return None
+    if not title:
+        return None
 
     title = normalize_spaces(title)
     if not looks_like_phone(title):
@@ -272,7 +275,8 @@ def extract_card(card, lang: str, origin: str) -> Optional[Dict]:
     if link and link.startswith("/"):
         base = "https://2b.com.eg/ar/" if lang == "ar" else "https://2b.com.eg/en/"
         link = urljoin(base, link)
-    if not link: return None
+    if not link:
+        return None
 
     price_text = ""
     for sel in [".price", ".special-price .price", ".price-wrapper", ".price-box", "[data-price-type='finalPrice']"]:
@@ -281,26 +285,25 @@ def extract_card(card, lang: str, origin: str) -> Optional[Dict]:
             price_text = el.get_text(" ", strip=True); break
     price = parse_price(price_text)
 
-    # parse
     norm = normalize_for_parse(title)
     brand, series, model = pick_brand_series_model(norm)
     suffix = parse_suffix(norm)
 
     return {
-        "store": STORE, "vendor": VENDOR, "country": COUNTRY, "currency": CURRENCY,
+        "store": STORE, "country": COUNTRY, "currency": CURRENCY,
         "title": title, "link": link, "price": price,
         "category": "mobiles",  # repo-wide label
         "brand": brand, "series": series, "model": model, "suffix": suffix,
         "origin": origin, "scraped_at": now_iso(), "lang": lang,
     }
 
-# ------------- Crawlers -------------
+# ------------- Crawlers (requests) -------------
 
-def paginate_category(driver, url: str, max_pages: int, lang: str) -> List[Dict]:
+def paginate_category(session: requests.Session, url: str, max_pages: int, lang: str) -> List[Dict]:
     out: List[Dict] = []
     page = 1
     while page <= max_pages:
-        soup = get_soup(driver, url)
+        soup = get_soup(session, url)
         cards = find_product_cards(soup)
         kept = 0
         for c in cards:
@@ -308,23 +311,24 @@ def paginate_category(driver, url: str, max_pages: int, lang: str) -> List[Dict]
             if item:
                 item["__query"] = "category"
                 out.append(item); kept += 1
-        # next page
+        # find next page
         next_link = None
         for sel in ["a.action.next", "li.pages-item-next a", "a[rel='next']", "a.page-next"]:
             a = soup.select_one(sel)
             if a and a.get("href"): next_link = a["href"]; break
         print(f"[2B][cat {lang}] page {page}: cards={len(cards)} kept={kept}")
-        if not next_link: break
+        if not next_link:
+            break
         url = next_link; page += 1
     return out
 
 
-def search_pages(driver, term: str, max_pages: int, lang: str) -> List[Dict]:
+def search_pages(session: requests.Session, term: str, max_pages: int, lang: str) -> List[Dict]:
     base = "https://2b.com.eg/ar/" if lang == "ar" else "https://2b.com.eg/en/"
     out: List[Dict] = []
     for p in range(1, max_pages + 1):
         url = urljoin(base, "catalogsearch/result/?" + urlencode({"q": term, "p": p}))
-        soup = get_soup(driver, url)
+        soup = get_soup(session, url)
         cards = find_product_cards(soup)
         kept = 0
         for c in cards:
@@ -350,7 +354,7 @@ def dedupe(items: List[Dict]) -> List[Dict]:
 
 def save_outputs(rows: List[Dict], csv_path: str, json_path: str):
     fields = [
-        "store","vendor","country","currency","title","link","price",
+        "store","country","currency","title","link","price",
         "category","brand","series","model","suffix","origin","scraped_at","lang","__query"
     ]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -386,7 +390,6 @@ def to_supabase_record(item: Dict) -> Dict:
         "country": COUNTRY,
         "currency": CURRENCY,
         "raw_title": item.get("title", ""),
-        # created_at left to DB default
     }
 
 
@@ -410,29 +413,28 @@ def supabase_upsert_all(rows: List[Dict]):
 # ------------- Main -------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Scrape 2B smartphones. Zero-arg default.", add_help=True)
+    ap = argparse.ArgumentParser(description="Scrape 2B smartphones (requests-only).", add_help=True)
     ap.add_argument("--lang", choices=["en","ar"], default=DEFAULT_LANG)
     ap.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
     ap.add_argument("--csv", type=str, default=DEFAULT_OUT_CSV)
     ap.add_argument("--json", type=str, default=DEFAULT_OUT_JSON)
-    ap.add_argument("--headless", action="store_true", default=DEFAULT_HEADLESS)
     ap.add_argument("--no-search", action="store_true", help="Skip brand search fallback")
     ap.add_argument("--terms", type=str, default=",".join(DEFAULT_SEARCH_TERMS), help="Comma-separated search terms")
     args = ap.parse_args()
 
-    # driver
-    driver = make_driver(headless=args.headless)
+    session = build_session(args.lang)
     rows: List[Dict] = []
-    try:
-        cat_url = CATEGORY_AR if args.lang == "ar" else CATEGORY_EN
-        rows.extend(paginate_category(driver, cat_url, max_pages=args.max_pages, lang=args.lang))
-        if not args.no_search:
-            for term in [t.strip() for t in (args.terms or "").split(",") if t.strip()]:
-                rows.extend(search_pages(driver, term, max_pages=args.max_pages, lang=args.lang))
-        print(f"Collected {len(rows)} raw rows before dedupe.")
-    finally:
-        try: driver.quit()
-        except Exception: pass
+
+    # category crawl
+    cat_url = CATEGORY_AR if args.lang == "ar" else CATEGORY_EN
+    rows.extend(paginate_category(session, cat_url, max_pages=args.max_pages, lang=args.lang))
+
+    # search sweep
+    if not args.no_search:
+        for term in [t.strip() for t in (args.terms or "").split(",") if t.strip()]:
+            rows.extend(search_pages(session, term, max_pages=args.max_pages, lang=args.lang))
+
+    print(f"Collected {len(rows)} raw rows before dedupe.")
 
     rows = dedupe(rows)
     print(f"Kept {len(rows)} rows after dedupe.")
