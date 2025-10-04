@@ -1,3 +1,5 @@
+
+
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
@@ -541,19 +543,28 @@ def supabase_upsert_all(rows: List[Dict]):
     url = os.getenv("SUPABASE_URL", "").strip().strip('"').strip("'")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
     table = os.getenv("SUPABASE_TABLE", "products")
+
     if not (url and key and create_client):
         print("Supabase not configured; skipping upsert.")
         return
+
     try:
         supa = create_client(url, key)
         payload = [to_supabase_record(r) for r in rows]
         chunk = 500
-        for i in range(0, len(payload), chunk):
-            supa.table(table).upsert(payload[i:i+chunk]).execute()
-        print(f"Upserted {len(payload)} rows into {table}.")
-    except Exception as e:
-        print("Supabase upsert failed:", e)
 
+        for i in range(0, len(payload), chunk):
+            # Upsert with conflict handling on store+link, and ignore duplicates
+            supa.table(table).upsert(
+                payload[i:i+chunk],
+                on_conflict=["store", "link"],
+                ignore_duplicates=True
+            ).execute()
+
+        print(f"✅ Upserted {len(payload)} rows into {table} (duplicates ignored).")
+
+    except Exception as e:
+        print(f"⚠️ Supabase upsert failed or partially completed: {e}")
 # ------------- Main -------------
 
 def main():
