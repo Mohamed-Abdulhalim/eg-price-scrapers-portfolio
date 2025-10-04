@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-2B smartphones scraper — repo-ready, requests-only edition (CI-safe)
+2B smartphones scraper — resilient category resolver + proxy + Supabase
 
-Why this version: your GitHub Action hit 403 Forbidden because 2B sometimes blocks cloud IPs
-or headless browsers. This build uses plain HTTP with warm-up requests, UA rotation, and
-optional proxy support so it behaves on CI.
+Why this version?
+- 2B keeps changing category slugs (causing 404). We now auto-resolve the category URL
+  from a list of known slugs and optionally by sniffing the homepage nav.
+- Works on CI via requests-only (no Selenium). Supports sticky proxies (e.g., DataImpulse)
+  through SCRAPER_PROXY env and excludes Supabase from proxy with NO_PROXY.
+- Uploads to Supabase `products` using columns that exist in your table.
 
-It keeps everything else you wanted:
-- Strict accessory filtering; English-normalized parsing; iPhone model keeps number
-- Dedupe by (link, suffix)
-- Exports CSV/JSON locally AND upserts to Supabase `products`
-- Only sends columns your table has: store, title, price, category, query,
-  brand_or_model, model, suffix, link, country, currency, raw_title
+ENV expected (in GitHub Actions or locally):
+  SUPABASE_URL
+  SUPABASE_SERVICE_ROLE_KEY  (or SUPABASE_ANON_KEY as fallback)
+  SUPABASE_TABLE=products    (optional)
+  SCRAPER_PROXY=http://user:pass@gw.example.com:port (optional)
+  NO_PROXY=.supabase.co,localhost,127.0.0.1         (recommended)
 
-Env:
-  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  (preferred) or SUPABASE_ANON_KEY (fallback)
-  SUPABASE_TABLE=products (optional)
-  SCRAPER_PROXY=http://user:pass@host:port  (optional; helps if 403 persists)
+Run examples:
+  python scrapers/_2b.py --lang ar --max-pages 8
+  python scrapers/_2b.py --lang en --max-pages 5 --no-search
 
-Category label unified to: "mobiles"
-Query field values:
-  - "category" for category crawl results
-  - actual search term for search results (e.g., "iphone")
+Notes for CI with a proxy:
+- Set sticky session in your proxy dashboard and use the sticky endpoint/port.
+- In workflow step set env SCRAPER_PROXY and NO_PROXY as shown in the workflow yaml.
 """
 import os, re, time, csv, json, random, argparse
 from typing import List, Dict, Optional, Tuple, Set
@@ -43,8 +44,19 @@ DEFAULT_SEARCH_TERMS = [
     "ايفون","ابل","سامسونج","شاومي","ريدمي","بوكو","اوبو","ريلمي","هواوي","هونر","فيفو","نوكيا","انفنيكس","تكنو","سوني",
 ]
 
-CATEGORY_EN = "https://2b.com.eg/en/mobile-tablets/mobile-phones.html"
-CATEGORY_AR = "https://2b.com.eg/ar/mobile-tablets/mobile-phones.html"
+# Known category slugs (2B rotates these sometimes)
+CATEGORY_CANDIDATES = {
+    "en": [
+        "https://2b.com.eg/en/mobile-and-tablet/mobiles.html",
+        "https://2b.com.eg/en/mobile-tablets/mobile-phones.html",
+        "https://2b.com.eg/en/mobile-tablet/mobile-phones.html",
+    ],
+    "ar": [
+        "https://2b.com.eg/ar/mobile-and-tablet/mobiles.html",
+        "https://2b.com.eg/ar/mobile-tablets/mobile-phones.html",
+        "https://2b.com.eg/ar/mobile-tablet/mobile-phones.html",
+    ],
+}
 
 STORE = "2B"
 COUNTRY = "EG"
@@ -88,40 +100,46 @@ def _cf_warmup(session: requests.Session, lang: str):
     base = "https://2b.com.eg/ar/" if lang == "ar" else "https://2b.com.eg/en/"
     try:
         session.get(base, timeout=20)
-        time.sleep(0.8 + random.random())
+        time.sleep(0.6 + random.random()*0.6)
     except Exception:
         pass
 
 
 def fetch_html(session: requests.Session, url: str, lang: str, tries: int = 4) -> Optional[str]:
-    """Fetch with retries, UA rotation, referer-ish behavior, and lang flip on 403."""
+    """Fetch with retries, UA rotation, language flip on 403, and small jitter."""
     _cf_warmup(session, lang)
     for attempt in range(1, tries + 1):
         try:
-            r = session.get(url, timeout=25)
+            r = session.get(url, timeout=25, allow_redirects=True)
             if r.status_code == 403:
-                # rotate UA and tweak language, then try alternate language path
+                # rotate UA and tweak language, then try alternate language path once
                 session.headers.update({
                     "User-Agent": random.choice(UA_POOL),
                     "Accept-Language": ("ar,en-US;q=0.9,en;q=0.8" if lang == "ar" else "en-US,en;q=0.9,ar;q=0.4")
                 })
-                time.sleep(1.5 * attempt)
+                time.sleep(1.2 * attempt)
                 if "/en/" in url:
                     alt = url.replace("/en/", "/ar/")
-                    r = session.get(alt, timeout=25)
+                    r = session.get(alt, timeout=25, allow_redirects=True)
                 elif "/ar/" in url:
                     alt = url.replace("/ar/", "/en/")
-                    r = session.get(alt, timeout=25)
+                    r = session.get(alt, timeout=25, allow_redirects=True)
+            if r.status_code in (520, 521, 522, 523, 524):  # Cloudflare oddities
+                time.sleep(1.0 * attempt)
+                continue
             r.raise_for_status()
-            time.sleep(0.8 + random.random()*0.6)
+            time.sleep(0.4 + random.random()*0.6)
             return r.text
         except requests.HTTPError as e:
-            if e.response is not None and e.response.status_code in (403, 429, 503):
-                time.sleep(1.2 * attempt)
+            if e.response is not None and e.response.status_code in (403, 404, 429, 503):
+                time.sleep(0.8 * attempt)
+                # do not loop forever on 404, just break so caller can handle
+                if e.response.status_code == 404:
+                    return None
                 continue
             raise
         except requests.RequestException:
-            time.sleep(1.0 * attempt)
+            time.sleep(0.8 * attempt)
             continue
     return None
 
@@ -131,6 +149,61 @@ def get_soup(session: requests.Session, url: str, lang: str) -> Optional[Beautif
     if not html:
         return None
     return BeautifulSoup(html, "html.parser")
+
+
+# --------- Category URL resolver ---------
+
+def resolve_category_via_candidates(session: requests.Session, lang: str) -> Optional[str]:
+    for url in CATEGORY_CANDIDATES.get(lang, []):
+        try:
+            r = session.get(url, timeout=20, allow_redirects=True)
+            if r.status_code == 200:
+                print(f"[2B] using category URL: {url}")
+                return url
+        except Exception:
+            pass
+    return None
+
+
+def resolve_category_via_home_nav(session: requests.Session, lang: str) -> Optional[str]:
+    base = "https://2b.com.eg/ar/" if lang == "ar" else "https://2b.com.eg/en/"
+    soup = get_soup(session, base, lang)
+    if not soup:
+        return None
+    anchors = soup.select("a[href]")
+    # Targets to look for in link text
+    if lang == "ar":
+        targets = ["موبايل", "هواتف", "موبايلات"]
+    else:
+        targets = ["mobile", "mobiles", "phones", "mobile phones"]
+    for a in anchors:
+        text = (a.get_text(" ", strip=True) or "").lower()
+        if any(t in text for t in targets):
+            href = a.get("href")
+            if href:
+                if href.startswith("/"):
+                    href = urljoin(base, href)
+                # sanity check the destination
+                try:
+                    r = session.get(href, timeout=20, allow_redirects=True)
+                    if r.status_code == 200 and ("mobile" in href or "phone" in href or "موبايل" in text):
+                        print(f"[2B] discovered category URL from nav: {href}")
+                        return href
+                except Exception:
+                    continue
+    return None
+
+
+def resolve_category_url(session: requests.Session, lang: str) -> Optional[str]:
+    url = resolve_category_via_candidates(session, lang)
+    if url:
+        return url
+    url = resolve_category_via_home_nav(session, lang)
+    if url:
+        return url
+    print(f"[2B] No working category URL found for lang={lang}")
+    return None
+
 
 # ---------------- Parsing helpers ----------------
 ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
@@ -268,7 +341,7 @@ def parse_suffix(t: str) -> str:
     flags = []
     if re.search(r"\b5G\b", tt, re.I):
         flags.append("5G")
-    if re.search(r"Dual[\s-]?SIM|Dual\s?\/?\s?Sim|Dual Sim|ثنائي الشريحة", tt, re.I):
+    if re.search(r"Dual[\s-]?SIM|Dual\s?\/\s?Sim|Dual Sim|ثنائي الشريحة", tt, re.I):
         flags.append("Dual SIM")
     parts = []
     if ram:
@@ -353,10 +426,10 @@ def extract_card(card, lang: str, origin: str) -> Optional[Dict]:
 def paginate_category(session: requests.Session, url: str, max_pages: int, lang: str) -> List[Dict]:
     out: List[Dict] = []
     page = 1
-    while page <= max_pages:
+    while page <= max_pages and url:
         soup = get_soup(session, url, lang)
         if soup is None:
-            print(f"[2B][cat {lang}] page {page}: FETCH FAILED (403/429/503)")
+            print(f"[2B][cat {lang}] page {page}: FETCH FAILED (403/429/503/404)")
             break
         cards = find_product_cards(soup)
         kept = 0
@@ -371,11 +444,15 @@ def paginate_category(session: requests.Session, url: str, max_pages: int, lang:
         for sel in ["a.action.next", "li.pages-item-next a", "a[rel='next']", "a.page-next"]:
             a = soup.select_one(sel)
             if a and a.get("href"):
-                next_link = a["href"]
+                next_link = a.get("href")
                 break
         print(f"[2B][cat {lang}] page {page}: cards={len(cards)} kept={kept}")
         if not next_link:
             break
+        # absolute-ify next link if needed
+        if next_link.startswith("/"):
+            base = "https://2b.com.eg/ar/" if lang == "ar" else "https://2b.com.eg/en/"
+            next_link = urljoin(base, next_link)
         url = next_link
         page += 1
     return out
@@ -388,7 +465,7 @@ def search_pages(session: requests.Session, term: str, max_pages: int, lang: str
         url = urljoin(base, "catalogsearch/result/?" + urlencode({"q": term, "p": p}))
         soup = get_soup(session, url, lang)
         if soup is None:
-            print(f"[2B][search {lang}] '{term}' p{p}: FETCH FAILED (403/429/503)")
+            print(f"[2B][search {lang}] '{term}' p{p}: FETCH FAILED (403/429/503/404)")
             break
         cards = find_product_cards(soup)
         kept = 0
@@ -480,7 +557,7 @@ def supabase_upsert_all(rows: List[Dict]):
 # ------------- Main -------------
 
 def main():
-    ap = argparse.ArgumentParser(description="Scrape 2B smartphones (requests-only, CI-hardened).", add_help=True)
+    ap = argparse.ArgumentParser(description="Scrape 2B smartphones (resilient, requests-only).", add_help=True)
     ap.add_argument("--lang", choices=["en","ar"], default=DEFAULT_LANG)
     ap.add_argument("--max-pages", type=int, default=DEFAULT_MAX_PAGES)
     ap.add_argument("--csv", type=str, default=DEFAULT_OUT_CSV)
@@ -492,9 +569,12 @@ def main():
     session = build_session(args.lang)
     rows: List[Dict] = []
 
-    # category crawl
-    cat_url = CATEGORY_AR if args.lang == "ar" else CATEGORY_EN
-    rows.extend(paginate_category(session, cat_url, max_pages=args.max_pages, lang=args.lang))
+    # resolve category
+    cat_url = resolve_category_url(session, args.lang)
+    if cat_url:
+        rows.extend(paginate_category(session, cat_url, max_pages=args.max_pages, lang=args.lang))
+    else:
+        print("[2B] Skipping category crawl (no working URL); continuing with search sweep...")
 
     # search sweep
     if not args.no_search:
