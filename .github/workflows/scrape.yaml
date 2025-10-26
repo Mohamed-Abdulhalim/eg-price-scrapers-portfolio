@@ -8,10 +8,13 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 180     # <— extended limit (3 hours)
+
+    concurrency:
+      group: eg-scrape
+      cancel-in-progress: false   # <— prevents daily overlap kills
 
     env:
-      # shared across steps
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
@@ -34,7 +37,6 @@ jobs:
           [ -n "$SUPABASE_URL" ] && echo "SUPABASE_URL present" || (echo "SUPABASE_URL MISSING"; exit 1)
           [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] && echo "SERVICE_ROLE present" || (echo "SERVICE_ROLE MISSING"; exit 1)
 
-      # Chrome — harmless if unused
       - name: Install Chrome (optional)
         run: |
           sudo apt-get update
@@ -43,41 +45,28 @@ jobs:
       # ---------------------- Your existing scrapers ----------------------
 
       - name: Run Amazon scraper
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           echo -e "mobiles\niphone 13" | python scrapers/_amazon.py
 
       - name: Run Noon scraper
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           echo -e "iphone 13\nmobiles" | python scrapers/noon.py
 
       - name: Run Jumia scraper
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           echo -e "iphone 13\nmobiles" | python scrapers/jumia.py
 
       - name: Run BTech scraper
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           echo -e "iphone 13\nmobiles" | python scrapers/btech.py
 
-      # ---------------------- 2B with proxy ----------------------
-
       - name: Run 2B scraper (with sticky EG proxy)
+        timeout-minutes: 170    # <— optional per-step timeout
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SCRAPER_PROXY: ${{ secrets.SCRAPER_PROXY }}     # e.g. http://login:pass@gw.dataimpulse.com:10000
-          NO_PROXY: ${{ secrets.NO_PROXY }}               # e.g. .supabase.co,localhost,127.0.0.1
-          PRINT_PROXY_IP: "1"                             # optional: print outbound IP once
+          SCRAPER_PROXY: ${{ secrets.SCRAPER_PROXY }}
+          NO_PROXY: ${{ secrets.NO_PROXY }}
+          PRINT_PROXY_IP: "1"
         run: |
           python scrapers/_2b.py --lang ar --max-pages 10
